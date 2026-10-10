@@ -2,7 +2,7 @@ services:
   - type: web
     name: eas-webdec-test
     runtime: docker
-    plan: starter
+    plan: free
     dockerfilePath: ./backend/Dockerfile
     dockerContext: ./backend
     healthCheckPath: /health
@@ -13,7 +13,3 @@ services:
         value: /data
       - key: PORT
         value: "8080"
-    disk:
-      name: station-data
-      mountPath: /data
-      sizeGB: 1

@@ -1,5 +1,7 @@
 import {spawn} from 'node:child_process';
 import crypto from 'node:crypto';
+import {PaulTts} from './paul-tts.mjs';
+import {audioFilter} from './audio-profile.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {once} from 'node:events';
@@ -9,6 +11,7 @@ const PCM_RATE=44100*4;
 export class Engine {
   constructor(store,options={}){
     this.store=store;this.ffmpeg=options.ffmpeg||'ffmpeg';this.speech=options.speech||'espeak-ng';this.fetch=options.fetch||fetch;
+    this.paul=new PaulTts(store,options.ttsFetch||fetch);
     this.renderSpeech=options.renderSpeech||this.synthesize.bind(this);this.clients=new Set();this.running=false;this.stopping=false;
     this.session=0;this.decoder=null;this.encoder=null;this.busy=false;this.nextForecast=0;this.now='Offline';this.error='';this.index=0;
     this.failed=new Set();this.recent=[];this.recentBytes=0;
@@ -20,7 +23,8 @@ export class Engine {
     if(this.running)return;
     this.running=true;this.stopping=false;this.error='';this.session++;this.failed.clear();this.recent=[];this.recentBytes=0;
     const session=this.session;
-    this.encoder=spawn(this.ffmpeg,['-hide_banner','-loglevel','error','-f','s16le','-ar','44100','-ac','2','-i','pipe:0','-c:a','libmp3lame','-b:a','128k','-write_xing','0','-id3v2_version','0','-flush_packets','1','-f','mp3','pipe:1'],{stdio:['pipe','pipe','pipe']});
+    const filters=audioFilter(this.store.state.settings),encoderArgs=['-hide_banner','-loglevel','error','-f','s16le','-ar','44100','-ac','2','-i','pipe:0'];if(filters)encoderArgs.push('-filter_complex',filters,'-map','[out]');encoderArgs.push('-ar','44100','-ac','2','-c:a','libmp3lame','-b:a','128k','-write_xing','0','-id3v2_version','0','-flush_packets','1','-f','mp3','pipe:1');
+    this.encoder=spawn(this.ffmpeg,encoderArgs,{stdio:['pipe','pipe','pipe']});
     const encoder=this.encoder;
     encoder.stdout.on('data',data=>this.publish(data));let stderr='';encoder.stderr.on('data',d=>stderr=(stderr+d).slice(-1500));
     encoder.stdin.on('error',()=>{});
@@ -55,6 +59,16 @@ export class Engine {
     else{this.now='Silence / no loop audio';await this.write(Buffer.alloc(PCM_RATE/4));await delay(250);}
   }}
   async synthesize(text,file){
+    if(this.store.state.settings.ttsVoice==='paul'){
+      try{const audio=await this.paul.audio(text),temporary=file+'.paul.wav';fs.writeFileSync(temporary,audio);try{await this.convertPaul(temporary,file);}finally{fs.rmSync(temporary,{force:true});}return;}
+      catch(error){if(!this.store.state.settings.ttsFallback)throw error;this.store.log('Paul voice unavailable; using local speech: '+error.message);}
+    }
+    return this.synthesizeLocal(text,file);
+  }
+  async convertPaul(input,output){
+    const speed=this.store.state.settings.speechSpeed/160,child=spawn(this.ffmpeg,['-hide_banner','-loglevel','error','-nostdin','-i',input,'-af','atempo='+speed,'-ar','44100','-ac','1','-c:a','pcm_s16le','-y',output],{stdio:['ignore','ignore','pipe']});let errors='';child.stderr.on('data',d=>errors+=d);const [code]=await once(child,'close');if(code!==0)throw new Error(errors||'Paul audio conversion failed.');
+  }
+  async synthesizeLocal(text,file){
     const child=spawn(this.speech,['-v','en-us','-s',String(this.store.state.settings.speechSpeed),'-w',file,'--stdin'],{stdio:['pipe','ignore','pipe']});
     const completed=once(child,'close');let stderr='';child.stderr.on('data',d=>stderr+=d);child.stdin.on('error',()=>{});child.stdin.end(text);const [code]=await completed;if(code!==0)throw new Error(stderr||'Speech synthesis failed.');
   }

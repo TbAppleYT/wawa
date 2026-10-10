@@ -1,48 +1,72 @@
-# eas-webdec-test — simple direct audio server
+# eas-webdec-test: Paul voice and subtle radio/VHS audio
 
-One server. No Icecast. This package serves a public listener at /, the administrator HTML at /admin, and the continuous MP3 audio at /stream.mp3.
+One direct audio server. No Icecast. Public listener at /, administration at /admin, MP3 stream at /stream.mp3.
 
-## Short online setup (Render)
+## Free online setup
 
-1. Extract this ZIP.
-2. Create a GitHub repository. Upload the extracted contents with render.yaml at the repository root and backend/ as a folder. Do not upload your administrator token.
-3. In Render, choose New > Blueprint, connect that repository, and review the proposed service. This blueprint uses a PAID Starter web service and a 1 GB persistent disk. Check the displayed cost before creating it. Free services sleep and cannot use this disk.
-4. Deploy. Render builds the Docker image including FFmpeg and eSpeak NG and assigns an HTTPS onrender.com URL.
-5. Open the service's Environment settings and copy the generated ADMIN_TOKEN. Keep it private.
-6. Open https://YOUR-SERVICE.onrender.com/admin. The server URL fills itself in. Enter ADMIN_TOKEN and authorize.
-7. Configuration: set location/coordinates, automatic forecast interval, forecast periods, loop volume and voice speed.
-8. Audio Files: upload your files (25 MB each) and put them in order.
-9. Station Status: Enable Station. Generate Forecast Now to test. Open the base website URL and click Connect to Stream.
-10. SAME Encoder: fill in location codes, origin, event, eight-character sender and expiry; choose optional attention tone and voice text. Generate Local Preview before Review and Send to Stream.
+1. Extract this ZIP and upload its contents to a GitHub repository, with render.yaml at the root and backend/ as a folder.
+2. In Render choose New > Blueprint, connect the repository and review the FREE service configuration. No disk is included.
+3. If Blueprint asks for payment, deploy manually: New > Web Service > Docker, Root Directory backend, Dockerfile ./Dockerfile, plan Free. Add ADMIN_TOKEN as a private random value of at least 24 characters.
+4. Deploy. Copy the generated ADMIN_TOKEN from the service Environment settings (or use the one you supplied manually).
+5. Open your assigned HTTPS URL followed by /admin. Enter the token; the server URL fills automatically.
+6. Configure your location, forecast interval, audio playlist, voice and audio profile. Enable Station. Open the base URL and press Connect to Stream.
+7. Use SAME Encoder to preview and queue messages.
 
-You can close the panel or shut down your PC; the remote service keeps running. Disable Station stops the source and disconnects listeners. Restarting the remote server resumes the saved desired state; expect an interruption during restarts/deploys.
+Render Free sleeps after 15 minutes without inbound traffic. Opening the website wakes it. Uploaded audio, settings, queues and voice cache are LOST when it sleeps, restarts or redeploys. Keep copies and re-upload/reconfigure after a reset. Enable/Disable controls audio generation, not host service provisioning.
 
-The HTML pages can also be downloaded and hosted separately. Enter the server's HTTPS URL in the separate control panel. Add that panel's exact origin to ADMIN_ORIGINS on the server. On a separately hosted listener, set STREAM_URL to the server's HTTPS /stream.mp3 URL instead of its default same-origin URL.
+## Voice
 
-## Operation
+Default voice: [VT] Current NWS Paul, voice ID paul.
+Provider: Wags' Puzzle Space, https://wagspuzzle.space/tools/eas-tts/index.php
 
-- Automatic NWS forecast speech for supported US coordinates; defaults are Virginia Beach, every 30 minutes.
-- Loop files are saved on the persistent disk. Empty playlist means silence.
-- Messages interrupt loop files and play once. Already queued messages finish first, then the loop resumes.
-- SAME generation is server-side AFSK: 520.8333 baud, LSB first, 16-byte AB preambles, three identical headers, optional attention tone, optional speech and three NNNN end bursts with one-second gaps.
-- Attention choices: none, 1050 Hz for 10 seconds, or 853+960 Hz for 8 seconds.
-- The test defaults are EAS/RWT/TEST0001 with no attention tone. Supply your own valid geographic codes; formatting validation does not confirm that a code/event exists.
-- Timestamp is UTC and stamped at generation. If you queue messages for a long time, their expiry may elapse before playback.
-- Generated SAME messages are operator-authored. Forecast generation does not automatically send SAME alerts.
-- This is an independent internet test station, not a government service or a certified EAS encoder. Physical receiver interoperability has not been verified.
-- Stream is 128 kbps MP3. Bandwidth increases with listener count (about 58 MB per listener-hour); the server caps connections at 100.
-- The login page is public; the backend authenticates all administration actions with the token. Token is held in page memory only.
-- A fatal encoder error requires you to correct the error and re-enable. Forecast failures appear in the activity log while loop audio continues.
+The provider uses a normal form submission, not a documented public synthesis API:
+GET index.php for a session cookie and XSRF token; POST voice=paul, text and xsrf; download the WAV from the returned cache/*.wav URL.
+A live short test returned valid 16 kHz mono WAV audio.
 
-## Alternate Docker host
+Text is sent to this provider for synthesis. Your station administrator token is never sent to it.
+The provider currently displays 50 successful requests per IP per day and does not guarantee uptime.
+Identical text is cached for seven days; requests are serialized; a local 50-attempt UTC-day budget and a five-minute outage cooldown reduce load. Shared host IPs may reach the provider limit earlier.
+Local eSpeak fallback is enabled and logged on failure. Disable fallback to fail instead, or select Local eSpeak for local-only synthesis.
+Speech speed 160 means normal Paul playback; other settings use FFmpeg tempo adjustment.
+Paul is used for automatic forecasts, custom announcements and spoken SAME message bodies. Forecast text still comes from the NWS API.
 
-Copy .env.example to .env and set a private ADMIN_TOKEN (at least 24 characters). Run docker compose up -d --build on an always-running remote Docker host. Expose the server through the host's HTTPS proxy. Persist /data and keep one instance. An HTML-only hosting service cannot run this engine.
+## Audio profile
 
-## Checks
+Enabled by default: mono, 120 Hz high-pass, 6 kHz low-pass.
+Pink noise amplitude: -55 dB. White noise amplitude: -60 dB.
+This is a subtle radio/VHS-inspired sound, not a literal radio carrier frequency.
+Lower noise dB values are quieter. Turning off the profile removes filtering and both noise layers.
+After changing profile settings, disable and enable the station to apply them.
+SAME previews are clean; the live stream includes the broadcast profile. The profile does not shift SAME frequencies or baud rate.
 
-node --test backend/tests/*.test.mjs
+## Existing station features
 
-Tests cover authenticated remote control, persistence, actual FFmpeg MP3 loop and announcement playback, independent SAME demodulation, header/EOM repetition, authenticated preview/queue, and both HTML routes. Real eSpeak/Docker builds and a deployed host still require verification.
+Loop your uploaded audio files in order (25 MB per file). Empty playlist produces silence, or quiet hiss with the profile enabled.
+Automatic NWS forecasts for supported US coordinates; defaults are Virginia Beach, every 30 minutes.
+Announcements interrupt the loop, play once, then resume it. Existing queued messages play first.
+SAME uses 520.8333 baud, 16-byte AB preambles, least-significant bit first, three header bursts and three NNNN end bursts.
+Optional attention signals: 1050 Hz for 10 seconds, or 853+960 Hz for 8 seconds.
+Default event is EAS/RWT/TEST0001 with no attention signal. Supply valid geographic codes.
+Timestamp is UTC at generation. Long queues can let messages expire before playback.
+This is an independent internet test system, not a certified encoder or government service. Physical receiver interoperability has not been verified.
+Stream is 128 kbps MP3, capped at 100 connections. Each listener uses about 58 MB per hour; free hosting bandwidth limits apply.
+Administrative requests require the token. The public login page itself is not secret.
+A fatal encoder error requires correcting the problem and re-enabling the station.
 
-Protocol reference: https://www.weather.gov/media/directives/010_pdfs/pd01017012curr.pdf
-Hosting: https://render.com/docs/blueprint-spec and https://render.com/docs/disks
+## Other hosts and standalone HTML
+
+The backend Dockerfile includes FFmpeg and eSpeak. Run one instance and expose its PORT through HTTPS.
+Persist /data on a host with persistent storage to retain uploaded files, cache and settings.
+An HTML-only host cannot run the audio engine.
+For a separately hosted panel, enter the server URL and add the panel's exact origin to ADMIN_ORIGINS.
+For a separately hosted listener, set STREAM_URL to the server's HTTPS /stream.mp3 address.
+
+## Verification
+
+Run: node --test backend/tests/*.test.mjs
+
+Nine tests passed, covering remote controls, real MP3 loop/announcement streaming with the audio profile, SAME demodulation, repeat bursts, preview/queue authorization, Paul form cookies/tokens/cache behavior, optional fallback and quiet noise RMS.
+A live request to the provider returned playable audio. A cloud deployment and real Docker/eSpeak output remain unverified.
+
+Protocol: https://www.weather.gov/media/directives/010_pdfs/pd01017012curr.pdf
+Hosting: https://render.com/docs/free
