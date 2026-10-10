@@ -1,0 +1,15 @@
+services:
+  station:
+    build: ./backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      DATA_DIR: /data
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?Set ADMIN_TOKEN in .env}
+      ADMIN_ORIGINS: ${ADMIN_ORIGINS:-}
+    volumes:
+      - station-data:/data
+volumes:
+  station-data:
