@@ -1,7 +1,7 @@
 import {spawn} from 'node:child_process';
 import crypto from 'node:crypto';
 import {PaulTts} from './paul-tts.mjs';
-import {audioFilter} from './audio-profile.mjs';
+import {audioFilter,RadioNoise} from './audio-profile.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import {once} from 'node:events';
@@ -14,7 +14,7 @@ export class Engine {
     this.paul=new PaulTts(store,options.ttsFetch||fetch);
     this.renderSpeech=options.renderSpeech||this.synthesize.bind(this);this.clients=new Set();this.running=false;this.stopping=false;
     this.session=0;this.decoder=null;this.encoder=null;this.busy=false;this.nextForecast=0;this.now='Offline';this.error='';this.index=0;
-    this.failed=new Set();this.recent=[];this.recentBytes=0;
+    this.failed=new Set();this.recent=[];this.recentBytes=0;this.activePlayback=null;this.playingAlert=false;
   }
   status(){return {running:this.running,now:this.now,error:this.error,listeners:this.clients.size,nextForecast:this.nextForecast||null,forecastBusy:this.busy};}
   addListener(response){for(const chunk of this.recent)response.write(chunk);this.clients.add(response);response.on('close',()=>this.clients.delete(response));}
@@ -23,6 +23,7 @@ export class Engine {
     if(this.running)return;
     this.running=true;this.stopping=false;this.error='';this.session++;this.failed.clear();this.recent=[];this.recentBytes=0;
     const session=this.session;
+    this.noise=new RadioNoise(this.store.state.settings);
     const filters=audioFilter(this.store.state.settings),encoderArgs=['-hide_banner','-loglevel','error','-f','s16le','-ar','44100','-ac','2','-i','pipe:0'];if(filters)encoderArgs.push('-filter_complex',filters,'-map','[out]');encoderArgs.push('-ar','44100','-ac','2','-c:a','libmp3lame','-b:a','128k','-write_xing','0','-id3v2_version','0','-flush_packets','1','-f','mp3','pipe:1');
     this.encoder=spawn(this.ffmpeg,encoderArgs,{stdio:['pipe','pipe','pipe']});
     const encoder=this.encoder;
@@ -36,22 +37,24 @@ export class Engine {
   fail(message,session){if(session!==this.session)return;this.error=message;this.store.log('Engine error: '+message);this.stop();}
   stop(){this.running=false;this.stopping=true;this.session++;clearInterval(this.forecastTimer);this.nextForecast=0;this.now='Offline';this.decoder?.kill('SIGKILL');this.encoder?.stdin.destroy();this.encoder?.kill('SIGKILL');for(const res of this.clients)res.end();this.clients.clear();this.recent=[];this.recentBytes=0;}
   forecastTick(){const state=this.store.state;if(this.running&&state.settings.automatic&&Date.now()>=this.nextForecast&&!this.busy){this.nextForecast=Date.now()+state.settings.interval*60000;if(!state.queue.some(m=>m.title==='Automatic weather forecast'))this.forecast().catch(e=>{this.error=e.message;this.store.log('Forecast failed: '+e.message);});}}
-  async write(chunk){if(!this.running||this.encoder.stdin.destroyed)return;const stream=this.encoder.stdin;if(!stream.write(chunk))await new Promise(resolve=>{const done=()=>{stream.off('drain',done);stream.off('error',done);stream.off('close',done);resolve();};stream.once('drain',done);stream.once('error',done);stream.once('close',done);});}
-  async play(file,offset,interruptible,volume,session){
+  interruptForAlert(){const playback=this.activePlayback;if(playback&&!playback.isAlert){playback.interrupted=true;playback.child.stdout.destroy();playback.child.kill('SIGKILL');}this.recent=[];this.recentBytes=0;}
+  async write(chunk){if(!this.running||this.encoder.stdin.destroyed)return;chunk=this.noise.process(chunk,this.playingAlert);if(!chunk.length)return;const stream=this.encoder.stdin;if(!stream.write(chunk))await new Promise(resolve=>{const done=()=>{stream.off('drain',done);stream.off('error',done);stream.off('close',done);resolve();};stream.once('drain',done);stream.once('error',done);stream.once('close',done);});}
+  async play(file,offset,interruptible,volume,session,isAlert=false){
     const args=['-hide_banner','-loglevel','error','-nostdin'];if(offset>0)args.push('-ss',String(offset));
     args.push('-i',file,'-vn','-af','volume='+volume,'-ar','44100','-ac','2','-f','s16le','pipe:1');
-    const child=spawn(this.ffmpeg,args,{stdio:['ignore','pipe','pipe']});this.decoder=child;let bytes=0,interrupted=false,error='',spawnError;
+    const child=spawn(this.ffmpeg,args,{stdio:['ignore','pipe','pipe']});this.decoder=child;const playback={child,isAlert,interrupted:false};this.activePlayback=playback;this.playingAlert=isAlert;let bytes=0,error='',spawnError;
     child.stderr.on('data',d=>error=(error+d).slice(-1000));child.on('error',e=>spawnError=e);const closed=new Promise(resolve=>child.on('close',resolve));
-    const timer=setInterval(()=>{if(interruptible&&this.store.state.queue.length){interrupted=true;child.kill();}},200);
-    try{for await(const chunk of child.stdout){if(session!==this.session||interrupted)break;const begin=Date.now();await this.write(chunk);bytes+=chunk.length;await delay(Math.max(0,chunk.length/PCM_RATE*1000-(Date.now()-begin)));}}
-    finally{clearInterval(timer);if(session!==this.session||interrupted)child.kill();}
-    const code=await closed;if(spawnError)throw spawnError;if(code!==0&&!interrupted&&session===this.session)throw new Error(error||'Audio decode failed');
-    return {offset:offset+bytes/PCM_RATE,interrupted};
+    const timer=setInterval(()=>{if(!isAlert&&((interruptible&&this.store.state.queue.length)||this.store.state.queue.some(m=>m.priority==='alert'))){playback.interrupted=true;child.stdout.destroy();child.kill('SIGKILL');}},50);
+    try{for await(const chunk of child.stdout){if(session!==this.session||playback.interrupted)break;const begin=Date.now();await this.write(chunk);bytes+=chunk.length;await delay(Math.max(0,chunk.length/PCM_RATE*1000-(Date.now()-begin)));}}
+    catch(e){if(!playback.interrupted&&session===this.session)spawnError=e;}
+    finally{clearInterval(timer);if(session!==this.session||playback.interrupted)child.kill('SIGKILL');}
+    const code=await closed;if(this.activePlayback===playback){this.activePlayback=null;this.playingAlert=false;}if(spawnError)throw spawnError;if(code!==0&&!playback.interrupted&&session===this.session)throw new Error(error||'Audio decode failed');
+    return {offset:offset+bytes/PCM_RATE,interrupted:playback.interrupted};
   }
   async program(session){let current=null,offset=0;while(this.running&&session===this.session){
     const state=this.store.state;
     const message=state.queue[0];
-    if(message){this.now=message.title;try{await this.play(path.join(this.store.dir,message.file),0,false,1,session);if(session!==this.session)break;state.queue=state.queue.filter(m=>m.id!==message.id);state.history.unshift({...message,status:'played',playedAt:new Date().toISOString()});state.history=state.history.slice(0,50);this.store.save();this.store.log('Announcement played: '+message.title);fs.rmSync(path.join(this.store.dir,message.file),{force:true});}catch(e){this.store.log('Announcement failed: '+e.message);state.queue=state.queue.filter(m=>m.id!==message.id);state.history.unshift({...message,status:'failed'});this.store.save();}continue;}
+    if(message){this.now=message.title;try{const result=await this.play(path.join(this.store.dir,message.file),0,false,1,session,message.priority==='alert');if(session!==this.session)break;state.queue=state.queue.filter(m=>m.id!==message.id);const status=result.interrupted?'interrupted':'played';state.history.unshift({...message,status,playedAt:new Date().toISOString()});state.history=state.history.slice(0,50);this.store.save();this.store.log('Announcement '+status+': '+message.title);fs.rmSync(path.join(this.store.dir,message.file),{force:true});}catch(e){this.store.log('Announcement failed: '+e.message);state.queue=state.queue.filter(m=>m.id!==message.id);state.history.unshift({...message,status:'failed'});this.store.save();}continue;}
     if(current&&!state.tracks.some(t=>t.id===current.id)){current=null;offset=0;}
     const available=state.tracks.filter(t=>!this.failed.has(t.id));
     if(!current&&available.length){current=available[this.index++%available.length];offset=0;}

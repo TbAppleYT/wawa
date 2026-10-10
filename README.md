@@ -32,18 +32,25 @@ Paul is used for automatic forecasts, custom announcements and spoken SAME messa
 
 ## Audio profile
 
-Enabled by default: mono, 120 Hz high-pass, 6 kHz low-pass.
+Enabled by default: mono, with an approximation of the supplied Filter Curve EQ screenshot.
+Curve points (Hz, dB): (20,-90), (60,-90), (70,0), (100,0), (900,-6.5), (2700,0), (4000,-0.5), (5000,-90), (20000,-90).
+Frequency interpolation is logarithmic. Values are estimated from the image; an exact match requires the original exported EQ curve.
+There is no glitch, pitch wobble, dropout or time modulation processing.
 Pink noise amplitude: -55 dB. White noise amplitude: -60 dB.
 This is a subtle radio/VHS-inspired sound, not a literal radio carrier frequency.
 Lower noise dB values are quieter. Turning off the profile removes filtering and both noise layers.
 After changing profile settings, disable and enable the station to apply them.
-SAME previews are clean; the live stream includes the broadcast profile. The profile does not shift SAME frequencies or baud rate.
+SAME previews are clean; the live stream includes the EQ. Both noise layers are muted during EAS audio. The EQ does not shift SAME frequencies or baud rate.
 
 ## Existing station features
 
 Loop your uploaded audio files in order (25 MB per file). Empty playlist produces silence, or quiet hiss with the profile enabled.
 Automatic NWS forecasts for supported US coordinates; defaults are Virginia Beach, every 30 minutes.
-Announcements interrupt the loop, play once, then resume it. Existing queued messages play first.
+Ordinary announcements interrupt the loop, play once, then resume it.
+Submitted SAME/EAS recordings have priority. Once the full recording is generated, it interrupts the loop or ordinary announcement and goes ahead of pending ordinary messages. Interrupted ordinary speech is marked interrupted and not replayed. Pending ordinary messages and the paused loop resume after the alerts.
+An EAS recording already on air finishes before the next EAS recording, preserving its end-of-message bursts. No background music or generated pink/white noise is mixed into the alert.
+Priority applies to alerts submitted through /api/same. This package does not monitor an external EAS audio feed or automatically ingest NWS alerts.
+MP3/proxy/browser buffering may delay when a remote listener hears the cutoff; no server can erase audio already buffered on a listener's device.
 SAME uses 520.8333 baud, 16-byte AB preambles, least-significant bit first, three header bursts and three NNNN end bursts.
 Optional attention signals: 1050 Hz for 10 seconds, or 853+960 Hz for 8 seconds.
 Default event is EAS/RWT/TEST0001 with no attention signal. Supply valid geographic codes.
@@ -65,7 +72,7 @@ For a separately hosted listener, set STREAM_URL to the server's HTTPS /stream.m
 
 Run: node --test backend/tests/*.test.mjs
 
-Nine tests passed, covering remote controls, real MP3 loop/announcement streaming with the audio profile, SAME demodulation, repeat bursts, preview/queue authorization, Paul form cookies/tokens/cache behavior, optional fallback and quiet noise RMS.
+Eleven tests passed, covering remote controls, real MP3 loop/announcement streaming with the audio profile, SAME demodulation, repeat bursts, preview/queue authorization, Paul form cookies/tokens/cache behavior, optional fallback, quiet noise RMS, measured EQ response, EAS interruption and complete serialization of consecutive alerts.
 A live request to the provider returned playable audio. A cloud deployment and real Docker/eSpeak output remain unverified.
 
 Protocol: https://www.weather.gov/media/directives/010_pdfs/pd01017012curr.pdf

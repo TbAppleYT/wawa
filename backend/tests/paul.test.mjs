@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {PaulTts,PAUL_ENDPOINT,audioFrom} from '../paul-tts.mjs';
-import {audioFilter} from '../audio-profile.mjs';
+import {audioFilter,RadioNoise,EQ_POINTS} from '../audio-profile.mjs';
 import {Engine} from '../engine.mjs';
 import {wav} from '../same.mjs';
 function fixture(){const dir=fs.mkdtempSync(path.join(os.tmpdir(),'paul-tts-'));return {dir,state:{settings:{ttsVoice:'paul',ttsFallback:true,speechSpeed:160}},save(){},log(value){this.logs.push(value);},logs:[]};}
@@ -21,6 +21,7 @@ test('Paul daily limit and outage cooldown are explicit; fallback is optional an
 });
 const hasFfmpeg=spawnSync('ffmpeg',['-version'],{stdio:'ignore'}).status===0;
 test('quiet pink/white noise renders at a low RMS level and profile can be bypassed',{skip:!hasFfmpeg},()=>{
- assert.equal(audioFilter({radioEffect:false}),null);const filter=audioFilter({radioEffect:true,pinkNoiseDb:-55,whiteNoiseDb:-60});assert.match(filter,/color=pink/);assert.match(filter,/color=white/);
- const result=spawnSync('ffmpeg',['-hide_banner','-loglevel','error','-f','s16le','-ar','44100','-ac','2','-i','pipe:0','-filter_complex',filter,'-map','[out]','-ar','44100','-ac','1','-f','s16le','pipe:1'],{input:Buffer.alloc(44100*4),maxBuffer:5*1024*1024,timeout:15000});assert.equal(result.status,0,result.stderr.toString());let energy=0;for(let n=0;n<result.stdout.length;n+=2)energy+=(result.stdout.readInt16LE(n)/32768)**2;const rms=Math.sqrt(energy/(result.stdout.length/2)),db=20*Math.log10(rms);assert.ok(db<-50&&db>-85,'Quiet nonzero noise expected, measured '+db.toFixed(1)+' dBFS');
+ assert.equal(audioFilter({radioEffect:false}),null);const filter=audioFilter({radioEffect:true,pinkNoiseDb:-55,whiteNoiseDb:-60});assert.ok(EQ_POINTS.some(([hz,db])=>hz===900&&db===-6.5));assert.ok(EQ_POINTS.some(([hz,db])=>hz===5000&&db===-90));assert.ok(!/vibrato|tremolo|crystalizer|flanger/.test(filter));
+ const noise=new RadioNoise(),silence=Buffer.alloc(44100*4);assert.deepEqual(noise.process(silence,true),silence,'Noise is completely muted during alert audio');
+ const result=spawnSync('ffmpeg',['-hide_banner','-loglevel','error','-f','s16le','-ar','44100','-ac','2','-i','pipe:0','-filter_complex',filter,'-map','[out]','-ar','44100','-ac','1','-f','s16le','pipe:1'],{input:noise.process(silence),maxBuffer:5*1024*1024,timeout:15000});assert.equal(result.status,0,result.stderr.toString());let energy=0;for(let n=0;n<result.stdout.length;n+=2)energy+=(result.stdout.readInt16LE(n)/32768)**2;const rms=Math.sqrt(energy/(result.stdout.length/2)),db=20*Math.log10(rms);assert.ok(db<-50&&db>-85,'Quiet nonzero noise expected, measured '+db.toFixed(1)+' dBFS');
 });

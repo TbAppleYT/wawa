@@ -51,8 +51,8 @@ export function createStation(options={}){
         if(store.state.queue.length>=50)throw new Error('Announcement queue is full.');
         const {config,audio}=await renderSame(engine,await parse());
         if(route==='/api/same-preview'){res.writeHead(200,{'Content-Type':'audio/wav','Content-Disposition':'attachment; filename="same-preview.wav"','X-SAME-Header':config.header});res.end(audio);return;}
-        const id=crypto.randomUUID(),file='queue/'+id+'.wav',message={id,file,title:'SAME '+config.event,text:config.text,header:config.header,createdAt:new Date().toISOString()};
-        fs.writeFileSync(path.join(store.dir,file),audio);store.state.queue.push(message);store.log('SAME audio queued: '+config.header);send(201,{message});return;
+        const id=crypto.randomUUID(),file='queue/'+id+'.wav',message={id,file,title:'SAME '+config.event,priority:'alert',text:config.text,header:config.header,createdAt:new Date().toISOString()};
+        fs.writeFileSync(path.join(store.dir,file),audio);const ordinary=store.state.queue.findIndex(m=>m.priority!=='alert');store.state.queue.splice(ordinary===-1?store.state.queue.length:ordinary,0,message);store.log('Priority EAS audio ready: '+config.header);engine.interruptForAlert?.();send(201,{message});return;
       }
       if(route==='/api/settings'&&req.method==='POST'){store.state.settings=validateSettings(await parse());store.log('Configuration saved.');engine.nextForecast=Date.now()+store.state.settings.interval*60000;send(200,{settings:store.state.settings});return;}
       if(route==='/api/forecast'&&req.method==='POST'){if(store.state.queue.some(m=>m.title==='Automatic weather forecast'))throw new Error('A forecast is already queued.');const forecast=await engine.forecast();send(200,{forecast});return;}
